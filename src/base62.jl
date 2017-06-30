@@ -40,7 +40,7 @@ end
 function encode(b::Array{UInt8,1})
     io=IOBuffer()
     encode(io,b)
-    return takebuf_string(io)
+    return String(take!(io))
 end
 
 function decode(s::AbstractString)

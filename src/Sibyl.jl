@@ -11,15 +11,15 @@ import Base.getindex
 
 include("base62.jl")
 
-typealias AWSEnv Dict
+const AWSEnv=Dict
 
 export asbytes,frombytes
 export empty
 
-typealias Bytes Array{UInt8,1}
+const Bytes=Array{UInt8,1}
 const empty=Bytes()
 
-abstract SibylCache
+abstract type SibylCache end
 writecache(cache::SibylCache,key::String,data::Bytes)=error("writecache not implemented")
 readcache(cache::SibylCache,key::String)=error("readcache not implemented")
 
@@ -255,7 +255,7 @@ function writebytes(io,xs...)
         if typeof(x)<:AbstractString
             b=IOBuffer()
             write(b,String(x))
-            b=takebuf_array(b)
+            b=take!(b)
             write(io,Int16(length(b)))
             write(io,b)
         elseif typeof(x) in [Array{String,1},Array{Array{UInt8,1},1}]
@@ -310,7 +310,7 @@ end
 function asbytes(xs...)
     io=IOBuffer()
     writebytes(io,xs...)
-    return takebuf_array(io)
+    return take!(io)
 end
 
 function frombytes(data,typs...)
@@ -350,7 +350,7 @@ function message(t::BlockTransaction)
     for s in t.s3keystodelete
         writebytes(io,s)
     end
-    r=takebuf_array(io)
+    r=take!(io)
     return Libz.deflate(r)
 end
 
