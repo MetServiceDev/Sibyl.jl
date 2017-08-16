@@ -33,6 +33,7 @@ type GlobalEnvironment
     cache::SibylCache
     mtimes::Dict{Tuple{String,String},Tuple{Int,Int}}
     forcecompact::Bool
+    nevercompact::Bool
 end
 
 function __init__()
@@ -40,7 +41,7 @@ function __init__()
                                              Base.Semaphore(128),
                                              FSCache.Cache(),
                                              Dict{Tuple{String,String},Tuple{Int,Int}}(),
-                                             false)
+                                             false,false)
     global makeawsenv=defaultmakeawsenv
 end
 
@@ -454,23 +455,24 @@ function readblock(connection::Connection,table::AbstractString,key::Bytes)
     for result in results
         interpret!(r,result)
     end
-    s3livekeys=String[]
-    # Should only delete objects if we are reading say 10 minutes after the instructions
-    @sync for x in objects
-        if x[3] in r.s3keystodelete
-            @async s3deleteobject(connection.bucket,x[3])
-            touchmtimes(connection.bucket,x[3])
-        else
-            push!(s3livekeys,x[3])
+    if !(globalenv.nevercompact)
+        s3livekeys=String[]
+        @sync for x in objects
+            if x[3] in r.s3keystodelete
+                @async s3deleteobject(connection.bucket,x[3])
+                touchmtimes(connection.bucket,x[3])
+            else
+                push!(s3livekeys,x[3])
+            end
         end
-    end
-    compactprobability=(length(s3livekeys)-1)/(length(s3livekeys)+100)
-    if (length(s3livekeys)>=2)&&(globalenv.forcecompact)
-        compactprobability=1.0
-    end
-    if rand()<compactprobability
-        newblock=BlockTransaction(r.data,r.deleted,s3livekeys)
-        @sync saveblock(newblock,connection,table,key)
+        compactprobability=(length(s3livekeys)-1)/(length(s3livekeys)+100)
+        if (length(s3livekeys)>=2)&&(globalenv.forcecompact)
+            compactprobability=1.0
+        end
+        if rand()<compactprobability
+            newblock=BlockTransaction(r.data,r.deleted,s3livekeys)
+            @sync saveblock(newblock,connection,table,key)
+        end
     end
     return r
 end
