@@ -477,6 +477,16 @@ function readblock(connection::Connection,table::AbstractString,key::Bytes)
     return r
 end
 
+function deletekey(connection::Connection,table::String,key::Bytes)
+    objects=[(frombytes(Base62.decode(String(split(x,"/")[5])),Int64)[1],
+              split(x,"/")[6],x)
+             for x in s3listobjects(connection.bucket,s3keyprefix(connection.space,table,key))]
+    @sync for x in objects
+        @async s3deleteobject(connection.bucket,x[3])
+        touchmtimes(connection.bucket,x[3])
+    end
+end
+
 function loadblocks!(t::Transaction,tablekeys)
     results=[]
     for (table,key) in tablekeys
