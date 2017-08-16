@@ -8,6 +8,7 @@ import AWSS3
 import Base.keys
 import Base.haskey
 import Base.getindex
+import Base.delete!
 
 include("base62.jl")
 
@@ -336,6 +337,13 @@ function upsert!(t::BlockTransaction,subkey::Bytes,value::Bytes)
     t.data[subkey]=value
 end
 
+function delete!(t::BlockTransaction,subkey::Bytes)
+    if haskey(t.data,subkey)
+        delete!(t.data,subkey)
+    end
+    push!(t.deleted,subkey)
+end
+
 function message(t::BlockTransaction)
     io=IOBuffer()
     writebytes(io,Int64(length(keys(t.data))))
@@ -393,6 +401,16 @@ function upsert!(t::Transaction,table::AbstractString,key::Bytes,subkey::Bytes,v
         t.tables[table][key]=BlockTransaction()
     end
     upsert!(t.tables[table][key],subkey,value)
+end
+
+function delete!(t::Transaction,table::AbstractString,key::Bytes,subkey::Bytes)
+    if !(haskey(t.tables,table))
+        t.tables[table]=Dict{Bytes,BlockTransaction}()
+    end
+    if !(haskey(t.tables[table],key))
+        t.tables[table][key]=BlockTransaction()
+    end
+    delete!(t.tables[table][key],subkey)
 end
 
 function s3keyprefix(space,table,key)
