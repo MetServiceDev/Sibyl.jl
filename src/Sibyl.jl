@@ -374,7 +374,7 @@ function interpret!(t::BlockTransaction,message::Bytes)
     end
     n=readbytes(io,Int64)[1]
     for i=1:n
-        delete!(t.data,readbytes(io,Bytes))
+        delete!(t.data,readbytes(io,Bytes)[1])
     end
     n=readbytes(io,Int64)[1]
     for i=1:n
@@ -470,7 +470,7 @@ function readblock(connection::Connection,table::AbstractString,key::Bytes)
     end
     if rand()<compactprobability
         newblock=BlockTransaction(r.data,r.deleted,s3livekeys)
-        saveblock(newblock,connection,table,key)
+        @sync saveblock(newblock,connection,table,key)
     end
     return r
 end
@@ -526,7 +526,7 @@ function compact(bucket,space;table="",marker="")
         catch
         end
     end
-    @sync while length(K)>0
+    while length(K)>0
         k=shift!(K)
         cnt=1
         while (length(K)>0)&&(k==K[1])
@@ -536,7 +536,7 @@ function compact(bucket,space;table="",marker="")
         if cnt>1
             println("$(space) $(k[1]) /$(Base62.encode(k[2]))/ $(cnt)")
             let k=k
-                @async readblock(connection,k[1],k[2])
+                readblock(connection,k[1],k[2])
             end
         end
     end
