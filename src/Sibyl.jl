@@ -119,7 +119,7 @@ function s3getobject1(bucket,s3key)
             releases3connection()
             return r
         catch e
-            if isa(e,AWSCore.NoSuchKey)
+            if e==ErrorException("NoSuch")
                 releases3connection()
                 return empty
             end
