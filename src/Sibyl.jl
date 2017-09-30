@@ -363,19 +363,26 @@ function message(t::BlockTransaction)
     return Libz.deflate(r)
 end
 
+function readBytes(io)
+    l=read(io,Int64)
+    b=read(io,UInt8,l)
+    return b
+end
+
 function interpret!(t::BlockTransaction,message::Bytes)
     if length(message)==0
         return
     end
     io=IOBuffer(Libz.inflate(message))
-    n=readbytes(io,Int64)[1]
+    n=(readbytes(io,Int64)[1])::Int64
     for i=1:n
-        x=readbytes(io,Bytes,Bytes)
-        t.data[x[1]]=x[2]
+        x1=readBytes(io)
+        x2=readBytes(io)
+        t.data[x1]=x2
     end
     n=readbytes(io,Int64)[1]
     for i=1:n
-        delete!(t.data,readbytes(io,Bytes)[1])
+        delete!(t.data,readBytes(io))
     end
     n=readbytes(io,Int64)[1]
     for i=1:n
