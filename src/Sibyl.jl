@@ -387,11 +387,11 @@ function interpret!(t::BlockTransaction,message::Bytes)
         x2=readBytes(io)
         t.data[x1]=x2
     end
-    n=readbytes(io,Int64)[1]
+    n=read(io,Int64)
     for i=1:n
         delete!(t.data,readBytes(io))
     end
-    n=readbytes(io,Int64)[1]
+    n=read(io,Int64)
     for i=1:n
         push!(t.s3keystodelete,readString(io))
     end
