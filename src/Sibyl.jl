@@ -309,6 +309,18 @@ function readbytes(io,typs...)
     return r
 end
 
+function readBytes(io)
+    l=read(io,Int64)
+    b=read(io,UInt8,l)
+    return b
+end
+
+function readString(io)
+    l=read(io,Int16)
+    b=read(io,UInt8,l)
+    return String(b)
+end
+
 function asbytes(xs...)
     io=IOBuffer()
     writebytes(io,xs...)
@@ -363,18 +375,13 @@ function message(t::BlockTransaction)
     return Libz.deflate(r)
 end
 
-function readBytes(io)
-    l=read(io,Int64)
-    b=read(io,UInt8,l)
-    return b
-end
 
 function interpret!(t::BlockTransaction,message::Bytes)
     if length(message)==0
         return
     end
     io=IOBuffer(Libz.inflate(message))
-    n=(readbytes(io,Int64)[1])::Int64
+    n=read(io,Int64)
     for i=1:n
         x1=readBytes(io)
         x2=readBytes(io)
@@ -386,7 +393,7 @@ function interpret!(t::BlockTransaction,message::Bytes)
     end
     n=readbytes(io,Int64)[1]
     for i=1:n
-        push!(t.s3keystodelete,readbytes(io,String)[1])
+        push!(t.s3keystodelete,readString(io))
     end
 end
 
