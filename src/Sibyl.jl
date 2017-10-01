@@ -382,6 +382,7 @@ function interpret!(t::BlockTransaction,message::Bytes)
     end
     io=IOBuffer(Libz.inflate(message))
     n=read(io,Int64)
+    sizehint!(t.data,n)
     for i=1:n
         x1=readBytes(io)
         x2=readBytes(io)
