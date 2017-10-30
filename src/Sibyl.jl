@@ -119,10 +119,12 @@ function s3getobject1(bucket,s3key)
             releases3connection()
             return r
         catch e
-            if e==ErrorException("NoSuch")
+            if typeof(e)==AWSCore.NoSuchKey
                 releases3connection()
                 return empty
             end
+            println(e) # printing unexpected exception will help us to fix
+                       # this faster if AWSCore.NoSuchKey changes again.
         end
         if trycount>0
             try
