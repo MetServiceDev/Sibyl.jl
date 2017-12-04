@@ -4,6 +4,7 @@ using SHA
 using Libz
 import AWSCore
 import AWSS3
+import JSON
 
 import Base.keys
 import Base.haskey
@@ -32,16 +33,16 @@ type GlobalEnvironment
     s3connections::Base.Semaphore
     cache::SibylCache
     mtimes::Dict{Tuple{String,String,String},Tuple{Int,Int}}
-    forcecompact::Bool
-    nevercompact::Bool
+    policies::Dict{Tuple{String,String,String},Dict{String,Any}}
 end
 
 function __init__()
     global const globalenv=GlobalEnvironment(Nullable{AWSEnv}(),
                                              Base.Semaphore(128),
                                              FSCache.Cache(),
-                                             Dict{Tuple{String,String},Tuple{Int,Int}}(),
-                                             false,false)
+                                             Dict{Tuple{String,String,String},Tuple{Int,Int}}(),
+                                             Dict{Tuple{String,String,String},Dict{String,Any}}()
+                                             )
     global makeawsenv=defaultmakeawsenv
 end
 
@@ -246,6 +247,44 @@ function s3listobjects(bucket,prefix)
     value=convert(Array{String,1},s3listobjects1(bucket,prefix))
     writecache(globalenv.cache,cachekey,asbytes(value))
     return value    
+end
+
+function getpolicy(bucket,space,table)
+    global globalenv
+    return get!(globalenv.policies,(bucket,space,table)) do
+        try
+            JSON.parse(String(s3getobject1(bucket,"$(space)/$(table)/policy.json")))
+        catch
+            Dict{String,Any}("compaction"=>"default","compaction_rate"=>100)
+        end
+    end
+end
+
+function setpolicy(bucket,space,table,policy)
+    global globalenv
+    io=IOBuffer()
+    write(io,JSON.json(policy))
+    b=take!(io)
+    s3putobject(bucket,"$(space)/$(table)/policy.json",b)
+    globalenv.policies[(bucket,space,table)]=policy
+end
+
+function policy_readdelete(bucket,space,table)
+    pol=getpolicy(bucket,space,table)
+    if pol["compaction"]=="default"
+        return true
+    end
+    return false
+end
+
+function policy_readcompact(bucket,space,table,key,n)
+    println("policy_readcompact($(bucket),$(space),$(table),$(key),$(n))")
+    pol=getpolicy(bucket,space,table)
+    if pol["compaction"]=="default"
+        compactprobability=(n-1)/(n+pol["compaction_rate"])
+        return rand()<=compactprobability
+    end
+    return false
 end
 
 type Connection
@@ -454,7 +493,7 @@ function save(t::Transaction)
     end
 end
 
-function readblock(connection::Connection,table::AbstractString,key::Bytes)
+function readblock(connection::Connection,table::AbstractString,key::Bytes,forcedelete=false,forcecompact=false)
     objects=[(frombytes(Base62.decode(String(split(x,"/")[end-1])),Int64)[1],
               split(x,"/")[end],x)
              for x in s3listobjects(connection.bucket,s3keyprefix(connection.space,table,key))]
@@ -472,25 +511,27 @@ function readblock(connection::Connection,table::AbstractString,key::Bytes)
     for result in results
         interpret!(r,result)
     end
-    if !(globalenv.nevercompact)
-        s3livekeys=String[]
-        @sync for x in objects
-            if x[3] in r.s3keystodelete
+
+    dodelete=(forcedelete)||(policy_readdelete(connection.bucket,connection.space,table))
+    s3livekeys=String[]
+    @sync for x in objects
+        if x[3] in r.s3keystodelete
+            if dodelete
                 @async s3deleteobject(connection.bucket,x[3])
                 touchmtimes(connection.bucket,x[3])
-            else
-                push!(s3livekeys,x[3])
             end
+        else
+            push!(s3livekeys,x[3])
         end
-        compactprobability=(length(s3livekeys)-1)/(length(s3livekeys)+100)
-        if (length(s3livekeys)>=2)&&(globalenv.forcecompact)
-            compactprobability=1.0
-        end
-        if rand()<compactprobability
+    end
+    
+    if (forcecompact)||(policy_readcompact(connection.bucket,connection.space,table,key,length(s3livekeys)))
+        if length(s3livekeys)>=2
             newblock=BlockTransaction(r.data,r.deleted,s3livekeys)
             @sync saveblock(newblock,connection,table,key)
         end
     end
+    
     return r
 end
 
@@ -519,63 +560,6 @@ function loadblocks!(t::Transaction,tablekeys)
     end
 end
 
-function compact(bucket,space;table="",marker="")
-    globalenv.cache=NoCache.Cache()
-    globalenv.s3connections=Base.Semaphore(512)
-    globalenv.forcecompact=true
-    connection=Connection(bucket,space)
-    env=getawsenv()
-    prefix=if table==""
-        "$(space)/"
-    else
-        "$(space)/$(table)/"
-    end
-    q=Dict("prefix"=>prefix)
-    if marker!=""
-        q["marker"]=marker
-    end
-    r=String[]
-    resp=AWSS3.s3(env,"GET",bucket;query=q)
-    if haskey(resp,"Contents")
-        if isa(resp["Contents"],Array)
-            for x in resp["Contents"]
-                push!(r,x["Key"])
-            end
-        else
-            push!(r,resp["Contents"]["Key"])
-        end
-    end
-    K=[]
-    for x in r
-        try
-            s=split(x,"/")
-            if s[3]!="mtime"
-                push!(K,(s[2],Base62.decode(s[4])))
-            end
-        catch
-        end
-    end
-    while length(K)>0
-        k=shift!(K)
-        cnt=1
-        while (length(K)>0)&&(k==K[1])
-            shift!(K)
-            cnt=cnt+1
-        end
-        if cnt>1
-            println("$(space) $(k[1]) /$(Base62.encode(k[2]))/ $(cnt)")
-            let k=k
-                readblock(connection,k[1],k[2])
-            end
-        end
-    end
-    if length(r)==1000
-        println(r[end])
-        return r[end]
-    else
-        return ""
-    end
-end
 
 end
 
