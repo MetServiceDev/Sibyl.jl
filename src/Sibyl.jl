@@ -31,7 +31,7 @@ type GlobalEnvironment
     awsenv::Nullable{AWSEnv}
     s3connections::Base.Semaphore
     cache::SibylCache
-    mtimes::Dict{Tuple{String,String},Tuple{Int,Int}}
+    mtimes::Dict{Tuple{String,String,String},Tuple{Int,Int}}
     forcecompact::Bool
     nevercompact::Bool
 end
@@ -221,9 +221,9 @@ function getmtime(bucket,s3prefix)
     space=s[1]
     table=s[2]
     hash=s[3]
-    if haskey(globalenv.mtimes,(space,table))
-        if globalenv.mtimes[(space,table)][1]+60>time()
-            return globalenv.mtimes[(space,table)][2]
+    if haskey(globalenv.mtimes,(bucket,space,table))
+        if globalenv.mtimes[(bucket,space,table)][1]+60>time()
+            return globalenv.mtimes[(bucket,space,table)][2]
         end
     end
     val=try
@@ -231,7 +231,7 @@ function getmtime(bucket,s3prefix)
     catch
         Int64(0)
     end
-    globalenv.mtimes[(space,table)]=(Int64(round(time())),val)
+    globalenv.mtimes[(bucket,space,table)]=(Int64(round(time())),val)
     return val
 end
 
