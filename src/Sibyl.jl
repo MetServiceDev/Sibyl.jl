@@ -1,5 +1,7 @@
 module Sibyl
 
+import HTTP
+
 using SHA
 using Libz
 import AWSCore
@@ -123,8 +125,10 @@ function s3getobject1(bucket,s3key)
                 releases3connection()
                 return empty
             end
-            println(e) # printing unexpected exception will help us to fix
-                       # this faster if AWSCore.NoSuchKey changes again.
+            if !(e isa HTTP.IOExtras.IOError)
+                println(e) # printing unexpected exception will help us to fix
+                           # this faster if AWSCore.NoSuchKey changes again.
+            end
         end
         if trycount>0
             try
