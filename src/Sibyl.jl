@@ -95,6 +95,8 @@ function s3putobject(bucket,s3key,m)
             releases3connection()
             return
         catch e
+            println("The following exception was caught in Sibyl.s3putobject")
+            println(e)
         end
         if trycount>0
             try
@@ -126,6 +128,7 @@ function s3getobject1(bucket,s3key)
                 return empty
             end
             if !(e isa HTTP.IOExtras.IOError)
+                println("The following exception was caught in Sibyl.s3getobject1")
                 println(e) # printing unexpected exception will help us to fix
                            # this faster if AWSCore.NoSuchKey changes again.
             end
@@ -192,7 +195,9 @@ function s3listobjects1(bucket,prefix)
                     return r
                 end
             end
-        catch
+        catch e
+            println("The following exception was caught in Sibyl.s3listobjects1")
+            println(e)
         end
         if trycount>0
             try
