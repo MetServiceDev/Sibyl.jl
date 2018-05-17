@@ -549,7 +549,7 @@ function compact(bucket,space;table="",marker="")
     for x in r
         try
             s=split(x,"/")
-            if s[3]!="mtime"
+            if (s[3]!="mtime")&&(s[3]!="raw")
                 push!(K,(s[2],Base62.decode(s[4])))
             end
         catch
