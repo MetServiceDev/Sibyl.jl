@@ -549,9 +549,13 @@ function compact(bucket,space;table="",marker="")
     for x in r
         try
             s=split(x,"/")
-            if (s[3]!="mtime")&&(s[3]!="raw")
-                push!(K,(s[2],Base62.decode(s[4])))
+            for s1 in s
+                if (s1=="mtime")||(s1=="raw")
+                    @goto skip
+                end
             end
+            push!(K,(s[2],Base62.decode(s[4])))
+            @label skip
         catch
         end
     end
