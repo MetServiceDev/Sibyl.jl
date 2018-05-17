@@ -525,6 +525,7 @@ function compact(bucket,space;table="",marker="")
     globalenv.forcecompact=true
     connection=Connection(bucket,space)
     env=getawsenv()
+    slashesinspace=length(split(space,"/"))-1
     prefix=if table==""
         "$(space)/"
     else
@@ -549,13 +550,9 @@ function compact(bucket,space;table="",marker="")
     for x in r
         try
             s=split(x,"/")
-            for s1 in s
-                if (s1=="mtime")||(s1=="raw")
-                    @goto skip
-                end
+            if !(s[3+slashesinspace] in ["mtime","raw"])
+                push!(K,(s[2+slashesinspace],Base62.decode(s[4+slashesinspace])))
             end
-            push!(K,(s[2],Base62.decode(s[4])))
-            @label skip
         catch
         end
     end
