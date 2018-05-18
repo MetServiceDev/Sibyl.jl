@@ -75,6 +75,7 @@ end
 
 function acquires3connection()
     global globalenv
+    yield()
     Base.acquire(globalenv.s3connections)
 end
 
