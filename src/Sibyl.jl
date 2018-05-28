@@ -37,6 +37,12 @@ type GlobalEnvironment
     mtimes::Dict{Tuple{String,String},Tuple{Int,Int}}
     forcecompact::Bool
     nevercompact::Bool
+    mtimelock::Base.Semaphore
+    
+    putcnt::Int
+    getcnt::Int
+    lstcnt::Int
+    delcnt::Int
 end
 
 function __init__()
@@ -44,7 +50,9 @@ function __init__()
                                              Base.Semaphore(128),
                                              FSCache.Cache(),
                                              Dict{Tuple{String,String},Tuple{Int,Int}}(),
-                                             false,false)
+                                             false,false,
+                                             Base.Semaphore(1),
+                                             0,0,0,0)
     global makeawsenv=defaultmakeawsenv
 end
 
@@ -88,6 +96,7 @@ function releases3connection()
 end
 
 function s3putobject(bucket,s3key,m)
+    globalenv.putcnt+=1
     trycount=0
     acquires3connection()
     while true
@@ -116,6 +125,7 @@ function s3putobject(bucket,s3key,m)
 end
 
 function s3getobject1(bucket,s3key)
+    globalenv.getcnt+=1
     trycount=0
     acquires3connection()
     while true
@@ -158,6 +168,7 @@ function s3getobject(bucket,s3key)
 end
 
 function s3deleteobject(bucket,s3key)
+    globalenv.delcnt+=1
     acquires3connection()
     try
         env=getawsenv()
@@ -168,6 +179,7 @@ function s3deleteobject(bucket,s3key)
 end
 
 function s3listobjects1(bucket,prefix)
+    globalenv.lstcnt+=1
     trycount=0
     acquires3connection()
     while true
@@ -233,12 +245,20 @@ function getmtime(bucket,s3prefix)
             return globalenv.mtimes[(space,table)][2]
         end
     end
+    Base.acquire(globalenv.mtimelock)
+    if haskey(globalenv.mtimes,(space,table))
+        if globalenv.mtimes[(space,table)][1]+60>time()
+            Base.release(globalenv.mtimelock)
+            return globalenv.mtimes[(space,table)][2]
+        end
+    end    
     val=try
         frombytes(s3getobject1(bucket,join([space,table,"mtime",""],'/')),Int64)[1]
     catch
         Int64(0)
     end
     globalenv.mtimes[(space,table)]=(Int64(round(time())),val)
+    Base.release(globalenv.mtimelock)
     return val
 end
 
