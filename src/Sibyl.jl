@@ -2,11 +2,8 @@ module Sibyl
 
 using SHA
 using Libz
-import AWSCoreMSR
-import AWSS3MSR
-
-const AWSCore=AWSCoreMSR
-const AWSS3=AWSS3MSR
+import AWSCore
+import AWSS3
 
 import Base.keys
 import Base.haskey
