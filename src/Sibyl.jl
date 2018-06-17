@@ -223,10 +223,9 @@ end
 
 function touchmtimes(bucket,s3key)
     s=split(s3key,'/')
-    l=length(s)
-    space=join(s[1:(l-5)],'/')
-    table=s[l-4]
-    hash=s[l-3]
+    space=join(s[1:(end-5)],'/')
+    table=s[end-4]
+    hash=s[end-3]
     m=asbytes(Int64(round(time())))
     for i=0:4
         @async s3putobject(bucket,join([space,table,"mtime",hash[1:i]],'/'),m)
@@ -235,10 +234,9 @@ end
 
 function getmtime(bucket,s3prefix)
     s=split(s3prefix,"/")
-    l=length(s)
-    space=join(s[1:(l-5)],'/')
-    table=s[l-4]
-    hash=s[l-3]
+    space=join(s[1:(end-5)],'/')
+    table=s[end-4]
+    hash=s[end-3]
     if haskey(globalenv.mtimes,(space,table))
         if globalenv.mtimes[(space,table)][1]+60>time()
             return globalenv.mtimes[(space,table)][2]
@@ -521,8 +519,8 @@ function readblock(connection::Connection,table::AbstractString,key::Bytes)
 end
 
 function deletekey(connection::Connection,table::String,key::Bytes)
-    objects=[(frombytes(Base62.decode(String(split(x,"/")[5])),Int64)[1],
-              split(x,"/")[6],x)
+    objects=[(frombytes(Base62.decode(String(split(x,"/")[end-1])),Int64)[1],
+              split(x,"/")[end],x)
              for x in s3listobjects(connection.bucket,s3keyprefix(connection.space,table,key))]
     @sync for x in objects
         @async s3deleteobject(connection.bucket,x[3])
