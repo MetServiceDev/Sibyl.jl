@@ -223,9 +223,10 @@ end
 
 function touchmtimes(bucket,s3key)
     s=split(s3key,'/')
-    space=s[1]
-    table=s[2]
-    hash=s[3]
+    l=length(s)
+    space=join(s[1:(l-5)],'/')
+    table=s[l-4]
+    hash=s[l-3]
     m=asbytes(Int64(round(time())))
     for i=0:4
         @async s3putobject(bucket,join([space,table,"mtime",hash[1:i]],'/'),m)
@@ -234,9 +235,10 @@ end
 
 function getmtime(bucket,s3prefix)
     s=split(s3prefix,"/")
-    space=s[1]
-    table=s[2]
-    hash=s[3]
+    l=length(s)
+    space=join(s[1:(l-5)],'/')
+    table=s[l-4]
+    hash=s[l-3]
     if haskey(globalenv.mtimes,(space,table))
         if globalenv.mtimes[(space,table)][1]+60>time()
             return globalenv.mtimes[(space,table)][2]
