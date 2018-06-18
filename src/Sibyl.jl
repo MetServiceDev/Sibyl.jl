@@ -234,9 +234,11 @@ end
 
 function getmtime(bucket,s3prefix)
     s=split(s3prefix,"/")
-    space=join(s[1:(end-5)],'/')
-    table=s[end-4]
-    hash=s[end-3]
+    println(s3prefix)
+    println(s)
+    space=join(s[1:(end-3)],'/')
+    table=s[end-2]
+    hash=s[end-1]
     if haskey(globalenv.mtimes,(space,table))
         if globalenv.mtimes[(space,table)][1]+60>time()
             return globalenv.mtimes[(space,table)][2]
