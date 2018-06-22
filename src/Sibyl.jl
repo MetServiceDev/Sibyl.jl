@@ -595,7 +595,7 @@ function compact(bucket,space;table="",marker="",reportfunc=println)
         end
     end
     if length(r)==1000
-        println(r[end])
+        reportfunc(r[end])
         return r[end]
     else
         return ""
