@@ -543,7 +543,7 @@ function loadblocks!(t::Transaction,tablekeys)
     end
 end
 
-function compact(bucket,space;table="",marker="")
+function compact(bucket,space;table="",marker="",reportfunc=println)
     globalenv.cache=NoCache.Cache()
     globalenv.s3connections=Base.Semaphore(512)
     globalenv.forcecompact=true
@@ -588,14 +588,14 @@ function compact(bucket,space;table="",marker="")
             cnt=cnt+1
         end
         if cnt>1
-            println("$(space) $(k[1]) /$(Base62.encode(k[2]))/ $(cnt)")
+            reportfunc("$(space) $(k[1]) /$(Base62.encode(k[2]))/ $(cnt)")
             let k=k
                 readblock(connection,k[1],k[2])
             end
         end
     end
     if length(r)==1000
-        println(r[end])
+        reportfunc(r[end])
         return r[end]
     else
         return ""
