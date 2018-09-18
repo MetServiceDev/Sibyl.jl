@@ -1,9 +1,10 @@
 module Sibyl
 
 using SHA
-using Libz
+using CodecZlib
 import AWSCore
 import AWSS3
+using Nullables
 
 import Base.keys
 import Base.haskey
@@ -27,7 +28,7 @@ readcache(cache::SibylCache,key::String)=error("readcache not implemented")
 include("nocache.jl")
 include("fscache.jl")
 
-type GlobalEnvironment
+mutable struct GlobalEnvironment
     awsenv::Nullable{AWSEnv}
     s3connections::Base.Semaphore
     cache::SibylCache
@@ -42,14 +43,15 @@ type GlobalEnvironment
     delcnt::Int
 end
 
+const globalenv=GlobalEnvironment(Nullable{AWSEnv}(),
+                                  Base.Semaphore(128),
+                                  FSCache.Cache(),
+                                  Dict{Tuple{String,String},Tuple{Int,Int}}(),
+                                  false,false,
+                                  Base.Semaphore(1),
+                                  0,0,0,0)
+
 function __init__()
-    global const globalenv=GlobalEnvironment(Nullable{AWSEnv}(),
-                                             Base.Semaphore(128),
-                                             FSCache.Cache(),
-                                             Dict{Tuple{String,String},Tuple{Int,Int}}(),
-                                             false,false,
-                                             Base.Semaphore(1),
-                                             0,0,0,0)
     global makeawsenv=defaultmakeawsenv
 end
 
@@ -272,7 +274,7 @@ function s3listobjects(bucket,prefix)
     return value    
 end
 
-type Connection
+mutable struct Connection
     bucket::String
     space::String
 end
@@ -301,7 +303,7 @@ function writebytes(io,xs...)
     end
 end
 
-frombytesarray{T}(data::Bytes,typ::Type{Array{T,1}})=reinterpret(T,data)
+frombytesarray(data::Bytes,typ::Type{Array{T,1}}) where T=reinterpret(T,data)
 
 function readbytes(io,typs...)
     r=[]
@@ -358,7 +360,7 @@ function frombytes(data,typs...)
     return readbytes(io,typs...)
 end
     
-type BlockTransaction
+mutable struct BlockTransaction
     data::Dict{Bytes,Bytes}
     deleted::Set{Bytes}
     s3keystodelete::Array{String,1}
@@ -424,7 +426,7 @@ function interpret!(t::BlockTransaction,message::Bytes)
     end
 end
 
-type Transaction
+mutable struct Transaction
     connection::Connection
     tables::Dict{String,Dict{Bytes,BlockTransaction}}
 end

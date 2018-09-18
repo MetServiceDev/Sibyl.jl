@@ -7,7 +7,7 @@ import ..Bytes
 import ..writecache
 import ..readcache
 
-type Cache <: SibylCache
+mutable struct Cache <: SibylCache
     basepath::String
 end
 

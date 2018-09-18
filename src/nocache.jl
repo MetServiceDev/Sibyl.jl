@@ -5,7 +5,7 @@ import ..Bytes
 import ..writecache
 import ..readcache
 
-type Cache <: SibylCache
+mutable struct Cache <: SibylCache
 end
 
 function writecache(cache::Cache,key::String,data::Bytes)
