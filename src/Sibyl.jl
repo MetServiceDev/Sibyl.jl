@@ -312,7 +312,8 @@ function readbytes(io,typs...)
     for typ in typs
         if typ==String
             l=read(io,Int16)
-            b=read(io,UInt8,l)
+            b=Array{UInt8}(undef,l)
+            read!(io,b)
             push!(r,String(b))
         elseif typ==Array{String,1}
             l=read(io,Int16)
@@ -341,7 +342,8 @@ end
 
 function readBytes(io)
     l=read(io,Int64)
-    b=read(io,UInt8,l)
+    b=Array{UInt8}(undef,l)
+    read!(io,b)
     return b
 end
 
