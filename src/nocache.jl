@@ -1,5 +1,7 @@
 module NoCache
 
+using Nullables
+
 import ..SibylCache
 import ..Bytes
 import ..writecache

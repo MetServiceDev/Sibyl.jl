@@ -2,9 +2,11 @@ module Sibyl
 
 using SHA
 using CodecZlib
+using TranscodingStreams
 import AWSCore
 import AWSS3
 using Nullables
+using Distributed
 
 import Base.keys
 import Base.haskey
@@ -386,7 +388,8 @@ function delete!(t::BlockTransaction,subkey::Bytes)
 end
 
 function message(t::BlockTransaction)
-    io=IOBuffer()
+    rawbuf=IOBuffer()
+    io=GzipCompressorStream(rawbuf)
     writebytes(io,Int64(length(keys(t.data))))
     for (k,v) in t.data
         writebytes(io,k,v)
@@ -399,8 +402,8 @@ function message(t::BlockTransaction)
     for s in t.s3keystodelete
         writebytes(io,s)
     end
-    r=take!(io)
-    return Libz.deflate(r)
+    write(io,TranscodingStreams.TOKEN_END) # finalise compression
+    return take!(rawbuf)
 end
 
 
@@ -408,7 +411,7 @@ function interpret!(t::BlockTransaction,message::Bytes)
     if length(message)==0
         return
     end
-    io=IOBuffer(Libz.inflate(message))
+    io=GzipDecompressorStream(IOBuffer(message))
     n=read(io,Int64)
     sizehint!(t.data,n)
     for i=1:n

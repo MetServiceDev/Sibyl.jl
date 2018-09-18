@@ -2,6 +2,8 @@ module FSCache
 
 using SHA
 
+using Nullables
+
 import ..SibylCache
 import ..Bytes
 import ..writecache
