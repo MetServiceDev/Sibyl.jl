@@ -331,7 +331,8 @@ function readbytes(io,typs...)
             push!(r,a)
         elseif typ<:Array
             l=read(io,Int64)
-            b=read(io,UInt8,l)
+            b=Array{UInt8}(undef,l)
+            read!(io,b)
             push!(r,frombytesarray(b,typ))
         else
             push!(r,read(io,typ))
