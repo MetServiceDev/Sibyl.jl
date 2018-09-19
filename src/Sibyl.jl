@@ -473,14 +473,14 @@ function saveblock(blocktransaction::BlockTransaction,connection,table,key)
     timestamp=Base62.encode(asbytes(Int64(round(time()))))
     nonce=Base62.encode(sha256(m))
     s3key="$(s3prefix)/$(timestamp)/$(nonce)"
-    @async s3putobject(connection.bucket,s3key,m)
+    s3putobject(connection.bucket,s3key,m)
     touchmtimes(connection.bucket,s3key)
 end
 
 function save(t::Transaction)
     @sync for (table,blocktransactions) in t.tables
         for (key,blocktransaction) in blocktransactions
-            saveblock(blocktransaction,t.connection,table,key)
+            @async saveblock(blocktransaction,t.connection,table,key)
         end
     end
 end
@@ -519,7 +519,7 @@ function readblock(connection::Connection,table::AbstractString,key::Bytes)
         end
         if rand()<compactprobability
             newblock=BlockTransaction(r.data,r.deleted,s3livekeys)
-            @sync saveblock(newblock,connection,table,key)
+            saveblock(newblock,connection,table,key)
         end
     end
     return r
