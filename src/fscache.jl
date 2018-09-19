@@ -35,7 +35,7 @@ function writecache(cache::Cache,key::String,data::Bytes)
     write(f,sha256(data))
     write(f,data)
     close(f)
-    mv(path*".tmp",path,remove_destination=true)
+    mv(path*".tmp",path,force=true)
 end
 
 function readcache(cache::Cache,key::String)
