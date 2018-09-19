@@ -350,7 +350,8 @@ end
 
 function readString(io)
     l=read(io,Int16)
-    b=read(io,UInt8,l)
+    b=Array{UInt8}(undef,l)
+    read!(io,b)
     return String(b)
 end
 
