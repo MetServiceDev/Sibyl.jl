@@ -590,10 +590,10 @@ function compact(bucket,space;table="",marker="",reportfunc=println)
         end
     end
     while length(K)>0
-        k=shift!(K)
+        k=popfirst!(K)
         cnt=1
         while (length(K)>0)&&(k==K[1])
-            shift!(K)
+            popfirst!(K)
             cnt=cnt+1
         end
         if cnt>1
