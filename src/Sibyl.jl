@@ -38,6 +38,7 @@ mutable struct GlobalEnvironment
     forcecompact::Bool
     nevercompact::Bool
     mtimelock::Base.Semaphore
+    getawsenvlock::Base.Semaphore
     
     putcnt::Int
     getcnt::Int
@@ -46,10 +47,11 @@ mutable struct GlobalEnvironment
 end
 
 const globalenv=GlobalEnvironment(Nullable{AWSEnv}(),
-                                  Base.Semaphore(128),
+                                  Base.Semaphore(512),
                                   FSCache.Cache(),
                                   Dict{Tuple{String,String},Tuple{Int,Int}}(),
                                   false,false,
+                                  Base.Semaphore(1),
                                   Base.Semaphore(1),
                                   0,0,0,0)
 
@@ -69,7 +71,6 @@ function defaultmakeawsenv()
         Nullable{AWSEnv}(AWSCore.aws_config())
     end
 end
-
 
 function getnewawsenv()
     global globalenv
@@ -96,15 +97,51 @@ function releases3connection()
     Base.release(globalenv.s3connections)
 end
 
+function acquiregetawsenvlock()
+    global globalenv
+    yield()
+    Base.acquire(globalenv.getawsenvlock)
+end
+
+function releasegetawsenvlock()
+    global globalenv
+    Base.release(globalenv.getawsenvlock)
+end
+
+"""
+@timeout secs expr then pollint
+Start executing `expr`; if it doesn't finish executing in `secs` seconds,
+then execute `then`. `pollint` controls the amount of time to wait in between
+checking if `expr` has finished executing (short for polling interval).
+"""
+macro timeout(t, expr, then, pollint=0.01)
+    return quote
+        if $(esc(t)) == Inf
+            $(esc(expr))
+        else
+            tm = Float64($(esc(t)))
+            start = time()
+            tsk = @async $(esc(expr))
+            yield()
+            while !istaskdone(tsk) && (time() - start < tm)
+                sleep($pollint)
+            end
+            if !istaskdone(tsk)
+                $(esc(then))
+            end
+        end
+    end
+end
+
 function s3putobject(bucket,s3key,m)
     globalenv.putcnt+=1
     trycount=0
-    acquires3connection()
     while true
         try
+            acquiregetawsenvlock()
             env=getawsenv()
+            releasegetawsenvlock()
             AWSS3.s3_put(env,bucket,s3key,m)
-            releases3connection()
             return
         catch e
             println("The following exception was caught in Sibyl.s3putobject")
@@ -112,46 +149,47 @@ function s3putobject(bucket,s3key,m)
         end
         if trycount>0
             try
+                acquiregetawsenvlock()
                 getnewawsenv()
+                releasegetawsenvlock()
             catch
             end
             sleep(trycount)
         end
         trycount=trycount+1
         if trycount>15
-            releases3connection()
             error("s3putobject timed out.")
         end
-    end 
+    end
 end
 
 function s3getobject1(bucket,s3key)
     globalenv.getcnt+=1
     trycount=0
-    acquires3connection()
     while true
         try
+            acquiregetawsenvlock()
             env=getawsenv()
+            releasegetawsenvlock()
             r=AWSS3.s3_get(env,bucket,s3key)
-            releases3connection()
             return r
         catch e
             if (e isa AWSCore.AWSException)&&(e.code=="NoSuchKey")
-                releases3connection()
                 return empty
             end
             println(e)
         end
         if trycount>0
             try
+                acquiregetawsenvlock()
                 getnewawsenv()
+                releasegetawsenvlock()
             catch
             end
             sleep(trycount)
         end
         trycount=trycount+1
         if trycount>15
-            releases3connection()
             error("s3getobject timed out.")
         end
     end
@@ -232,7 +270,11 @@ function touchmtimes(bucket,s3key)
     hash=s[end-3]
     m=asbytes(Int64(round(time())))
     for i=0:4
-        @async s3putobject(bucket,join([space,table,"mtime",hash[1:i]],'/'),m)
+        @async begin
+                   acquires3connection()
+                   s3putobject(bucket,join([space,table,"mtime",hash[1:i]],'/'),m)
+                   releases3connection()
+               end
     end
 end
 
@@ -254,7 +296,9 @@ function getmtime(bucket,s3prefix)
         end
     end    
     val=try
+        acquires3connection()
         frombytes(s3getobject1(bucket,join([space,table,"mtime",""],'/')),Int64)[1]
+        releases3connection()
     catch
         Int64(0)
     end
@@ -280,7 +324,6 @@ mutable struct Connection
     bucket::String
     space::String
 end
-
 
 function writebytes(io,xs...)
     for x in xs
@@ -410,7 +453,6 @@ function message(t::BlockTransaction)
     return take!(rawbuf)
 end
 
-
 function interpret!(t::BlockTransaction,message::Bytes)
     if length(message)==0
         return
@@ -477,29 +519,71 @@ function saveblock(blocktransaction::BlockTransaction,connection,table,key)
     s3key="$(s3prefix)/$(timestamp)/$(nonce)"
     s3putobject(connection.bucket,s3key,m)
     touchmtimes(connection.bucket,s3key)
+    return 0
 end
 
 function save(t::Transaction)
+    timeoutlimit=16
     @sync for (table,blocktransactions) in t.tables
-        for (key,blocktransaction) in blocktransactions
-            @async saveblock(blocktransaction,t.connection,table,key)
+        todo=Set(blocktransactions)
+        while length(todo)>0
+            tempresults=Dict()
+            for object in todo
+                result=Future()
+                tempresults[object]=result
+                (key,blocktransaction) = object
+                @async begin
+                           acquires3connection()
+                           @timeout(timeoutlimit,
+                                put!(result,saveblock(blocktransaction,
+                                                      t.connection,
+                                                      table,
+                                                      key)),
+                                put!(result,nothing))
+                           releases3connection()
+                       end
+            end
+            for (object,result) in tempresults
+                r=fetch(result)
+                if r!=nothing
+                    pop!(todo,object)
+                end
+            end
+            timeoutlimit+=4
         end
     end
 end
 
 function readblock(connection::Connection,table::AbstractString,key::Bytes)
+    timeoutlimit=4
     objects=[(frombytes(Base62.decode(String(split(x,"/")[end-1])),Int64)[1],
               split(x,"/")[end],x)
              for x in s3listobjects(connection.bucket,s3keyprefix(connection.space,table,key))]
     sort!(objects)
     results=[]
-    for i=1:length(objects)
-        result=Future()
-        push!(results,result)
-        @async put!(result,s3getobject(connection.bucket,objects[i][3]))
-    end
-    for i=1:length(objects)
-        results[i]=fetch(results[i])
+    todo=Set(objects)
+    while length(todo)>0
+        tempresults=Dict()
+        for object in todo
+            result=Future()
+            tempresults[object]=result
+            @async begin
+                        acquires3connection()
+                        @timeout(timeoutlimit,
+                            put!(result,s3getobject(connection.bucket,
+                                                    object[3])),
+                            put!(result,nothing))
+                        releases3connection()
+                   end
+        end
+        for (object,result) in tempresults
+            r=fetch(result)
+            if r!=nothing
+                pop!(todo,object)
+                push!(results,r)
+            end
+        end
+        timeoutlimit+=4
     end
     r=BlockTransaction()
     for result in results
@@ -521,7 +605,9 @@ function readblock(connection::Connection,table::AbstractString,key::Bytes)
         end
         if rand()<compactprobability
             newblock=BlockTransaction(r.data,r.deleted,s3livekeys)
+            acquires3connection()
             saveblock(newblock,connection,table,key)
+            releases3connection()
         end
     end
     return r
@@ -590,10 +676,10 @@ function compact(bucket,space;table="",marker="",reportfunc=println)
         end
     end
     while length(K)>0
-        k=shift!(K)
+        k=popfirst!(K)
         cnt=1
         while (length(K)>0)&&(k==K[1])
-            shift!(K)
+            popfirst!(K)
             cnt=cnt+1
         end
         if cnt>1
@@ -612,4 +698,3 @@ function compact(bucket,space;table="",marker="",reportfunc=println)
 end
 
 end
-
