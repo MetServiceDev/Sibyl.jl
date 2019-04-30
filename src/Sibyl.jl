@@ -47,7 +47,7 @@ mutable struct GlobalEnvironment
 end
 
 const globalenv=GlobalEnvironment(Nullable{AWSEnv}(),
-                                  Base.Semaphore(512),
+                                  Base.Semaphore(128),
                                   FSCache.Cache(),
                                   Dict{Tuple{String,String},Tuple{Int,Int}}(),
                                   false,false,
