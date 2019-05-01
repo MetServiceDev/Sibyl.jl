@@ -156,8 +156,8 @@ function s3putobject(bucket,s3key,m)
             AWSS3.s3_put(env,bucket,s3key,m)
             return 0
         catch e
-            println("The following exception was caught in Sibyl.s3putobject")
-            println(e)
+            @logwarn "The following exception was caught in Sibyl.s3putobject"
+            @logwarn e
         end
         if trycount>0
             try
@@ -189,7 +189,7 @@ function s3getobject1(bucket,s3key)
             if (e isa AWSCore.AWSException)&&(e.code=="NoSuchKey")
                 return empty
             end
-            println(e)
+            @logwarn e
         end
         if trycount>0
             try
@@ -257,8 +257,8 @@ function s3listobjects1(bucket,prefix)
                 end
             end
         catch e
-            println("The following exception was caught in Sibyl.s3listobjects1")
-            println(e)
+            @logwarn "The following exception was caught in Sibyl.s3listobjects1"
+            @logwarn e
         end
         if trycount>0
             try
@@ -297,7 +297,7 @@ function touchmtimes(bucket,s3key)
                      put!(result,s3putobject(bucket,prefix,m)),
                      put!(result,begin
                                     uniqueid = hash([bucket,key])
-                                    println("touchmtimes timed out: $(bucket) $(uniqueid)")
+                                    @loginfo "    touchmtimes timed out: $(bucket) $(uniqueid)"
                                     nothing
                                  end))
             end
@@ -575,7 +575,7 @@ function save(t::Transaction)
                                                       key)),
                                 put!(result,begin
                                                 uniqueid = hash([table,key,blocktransaction])
-                                                println("save timed out: $(table) $(uniqueid)")
+                                                @loginfo "    save timed out: $(table) $(uniqueid)"
                                                 nothing
                                             end))
                            releases3connection()
@@ -593,7 +593,7 @@ function save(t::Transaction)
 end
 
 function readblock(connection::Connection,table::AbstractString,key::Bytes)
-    timeoutlimit=4
+    timeoutlimit=32
     objects=[(frombytes(Base62.decode(String(split(x,"/")[end-1])),Int64)[1],
               split(x,"/")[end],x)
              for x in s3listobjects(connection.bucket,s3keyprefix(connection.space,table,key))]
@@ -602,7 +602,7 @@ function readblock(connection::Connection,table::AbstractString,key::Bytes)
     todo=Set(objects)
     while length(todo)>0
         tempresults=Dict()
-        for object in todo
+        @sync for object in todo
             result=Future()
             tempresults[object]=result
             @async begin
@@ -611,8 +611,8 @@ function readblock(connection::Connection,table::AbstractString,key::Bytes)
                             put!(result,s3getobject(connection.bucket,
                                                     object[3])),
                             put!(result,begin
-                                            uniqueid = hash([table,key])
-                                            println("readblock timed out: $(table) $(uniqueid)")
+                                            uniqueid = hash([table,key,object])
+                                            @loginfo "    readblock timed out: $(table) $(uniqueid)"
                                             nothing
                                         end))
                         releases3connection()
