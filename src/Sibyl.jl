@@ -1,5 +1,7 @@
 module Sibyl
 
+using AMPSBase.Log
+
 using SHA
 using CodecZlib
 using TranscodingStreams
@@ -14,6 +16,8 @@ import Base.getindex
 import Base.delete!
 
 include("base62.jl")
+
+const S3CONNECTIONS = 128
 
 const AWSEnv=Dict
 
@@ -35,6 +39,7 @@ mutable struct GlobalEnvironment
     s3connections::Base.Semaphore
     cache::SibylCache
     mtimes::Dict{Tuple{String,String},Tuple{Int,Int}}
+    touchmtimes::Bool
     forcecompact::Bool
     nevercompact::Bool
     mtimelock::Base.Semaphore
@@ -47,13 +52,20 @@ mutable struct GlobalEnvironment
 end
 
 const globalenv=GlobalEnvironment(Nullable{AWSEnv}(),
-                                  Base.Semaphore(128),
+                                  Base.Semaphore(S3CONNECTIONS),
                                   FSCache.Cache(),
                                   Dict{Tuple{String,String},Tuple{Int,Int}}(),
-                                  false,false,
+                                  true,false,false,
                                   Base.Semaphore(1),
                                   Base.Semaphore(1),
                                   0,0,0,0)
+
+function reset_locks()
+    global globalenv
+    globalenv.s3connections = Base.Semaphore(S3CONNECTIONS)
+    globalenv.mtimelock = Base.Semaphore(1)
+    globalenv.getawsenvlock = Base.Semaphore(1)
+end
 
 function __init__()
     global makeawsenv=defaultmakeawsenv
@@ -114,7 +126,7 @@ Start executing `expr`; if it doesn't finish executing in `secs` seconds,
 then execute `then`. `pollint` controls the amount of time to wait in between
 checking if `expr` has finished executing (short for polling interval).
 """
-macro timeout(t, expr, then, pollint=0.01)
+macro timeout(t, expr, then, pollint=0.1)
     return quote
         if $(esc(t)) == Inf
             $(esc(expr))
@@ -142,7 +154,7 @@ function s3putobject(bucket,s3key,m)
             env=getawsenv()
             releasegetawsenvlock()
             AWSS3.s3_put(env,bucket,s3key,m)
-            return
+            return 0
         catch e
             println("The following exception was caught in Sibyl.s3putobject")
             println(e)
@@ -264,17 +276,39 @@ function s3listobjects1(bucket,prefix)
 end
 
 function touchmtimes(bucket,s3key)
+    if !globalenv.touchmtimes
+        return
+    end
     s=split(s3key,'/')
     space=join(s[1:(end-5)],'/')
     table=s[end-4]
-    hash=s[end-3]
+    myhash=s[end-3]
     m=asbytes(Int64(round(time())))
-    for i=0:4
-        @async begin
-                   acquires3connection()
-                   s3putobject(bucket,join([space,table,"mtime",hash[1:i]],'/'),m)
-                   releases3connection()
-               end
+    timeoutlimit=32
+    todo=Set(0:4)
+    while length(todo)>0
+        tempresults=Dict()
+        for i in todo
+            result=Future()
+            tempresults[i]=result
+            prefix = join([space,table,"mtime",myhash[1:i]],'/')
+            @async begin
+                @timeout(timeoutlimit,
+                     put!(result,s3putobject(bucket,prefix,m)),
+                     put!(result,begin
+                                    uniqueid = hash([bucket,key])
+                                    println("touchmtimes timed out: $(bucket) $(uniqueid)")
+                                    nothing
+                                 end))
+            end
+        end
+        for (i,result) in tempresults
+            r=fetch(result)
+            if r!=nothing
+                pop!(todo,i)
+            end
+        end
+        timeoutlimit+=4
     end
 end
 
@@ -282,7 +316,7 @@ function getmtime(bucket,s3prefix)
     s=split(s3prefix,"/")
     space=join(s[1:(end-3)],'/')
     table=s[end-2]
-    hash=s[end-1]
+    myhash=s[end-1]
     if haskey(globalenv.mtimes,(space,table))
         if globalenv.mtimes[(space,table)][1]+60>time()
             return globalenv.mtimes[(space,table)][2]
@@ -507,8 +541,8 @@ function delete!(t::Transaction,table::AbstractString,key::Bytes,subkey::Bytes)
 end
 
 function s3keyprefix(space,table,key)
-    hash=bytes2hex(sha256(key))[1:4]
-    return "$(space)/$(table)/$(hash)/$(Base62.encode(key))"
+    myhash=bytes2hex(sha256(key))[1:4]
+    return "$(space)/$(table)/$(myhash)/$(Base62.encode(key))"
 end
 
 function saveblock(blocktransaction::BlockTransaction,connection,table,key)
@@ -523,7 +557,7 @@ function saveblock(blocktransaction::BlockTransaction,connection,table,key)
 end
 
 function save(t::Transaction)
-    timeoutlimit=16
+    timeoutlimit=32
     @sync for (table,blocktransactions) in t.tables
         todo=Set(blocktransactions)
         while length(todo)>0
@@ -539,7 +573,11 @@ function save(t::Transaction)
                                                       t.connection,
                                                       table,
                                                       key)),
-                                put!(result,nothing))
+                                put!(result,begin
+                                                uniqueid = hash([table,key,blocktransaction])
+                                                println("save timed out: $(table) $(uniqueid)")
+                                                nothing
+                                            end))
                            releases3connection()
                        end
             end
@@ -572,7 +610,11 @@ function readblock(connection::Connection,table::AbstractString,key::Bytes)
                         @timeout(timeoutlimit,
                             put!(result,s3getobject(connection.bucket,
                                                     object[3])),
-                            put!(result,nothing))
+                            put!(result,begin
+                                            uniqueid = hash([table,key])
+                                            println("readblock timed out: $(table) $(uniqueid)")
+                                            nothing
+                                        end))
                         releases3connection()
                    end
         end
