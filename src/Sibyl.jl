@@ -144,7 +144,9 @@ macro timeout(t, expr, then, pollint=0.1)
             while !istaskdone(tsk) && (time() - start < tm)
                 sleep($pollint)
             end
-            if !istaskdone(tsk)
+            if istaskdone(tsk)
+                tsk.result
+            else
                 $(esc(then))
             end
         end
@@ -294,19 +296,20 @@ function touchmtimes(bucket,s3key)
     todo=Set(0:4)
     while length(todo)>0
         tempresults=Dict()
-        for i in todo
+        @sync for i in todo
             result=Future()
             tempresults[i]=result
-            prefix = join([space,table,"mtime",myhash[1:i]],'/')
-            @async begin
+            prefix=join([space,table,"mtime",myhash[1:i]],'/')
+            @async put!(result, 
                 @timeout(timeoutlimit,
-                     put!(result,s3putobject(bucket,prefix,m)),
-                     put!(result,begin
-                                    uniqueid = hash([bucket,key])
-                                    @loginfo "    touchmtimes timed out: $(bucket) $(uniqueid)"
-                                    nothing
-                                 end))
-            end
+                         s3putobject(bucket,prefix,m),
+                         begin
+                            uniqueid = hash([bucket,key])
+                            @loginfo "    touchmtimes timed out: $(bucket) $(uniqueid)"
+                            nothing
+                         end
+                    )
+                )
         end
         for (i,result) in tempresults
             r=fetch(result)
@@ -568,24 +571,24 @@ function save(t::Transaction)
         todo=Set(blocktransactions)
         while length(todo)>0
             tempresults=Dict()
-            for object in todo
+            @sync for object in todo
                 result=Future()
                 tempresults[object]=result
                 (key,blocktransaction) = object
                 @async begin
-                           acquires3connection()
-                           @timeout(timeoutlimit,
-                                put!(result,saveblock(blocktransaction,
-                                                      t.connection,
-                                                      table,
-                                                      key)),
-                                put!(result,begin
-                                                uniqueid = hash([table,key,blocktransaction])
-                                                @loginfo "    save timed out: $(table) $(uniqueid)"
-                                                nothing
-                                            end))
-                           releases3connection()
-                       end
+                    acquires3connection()
+                    put!(result,
+                         @timeout(timeoutlimit,
+                                  saveblock(blocktransaction, t.connection, table, key),
+                                  begin
+                                      uniqueid = hash([table,key,blocktransaction])
+                                      @loginfo "    save timed out: $(table) $(uniqueid)"
+                                      nothing
+                                  end
+                             )
+                         )
+                    releases3connection()
+                end
             end
             for (object,result) in tempresults
                 r=fetch(result)
@@ -612,17 +615,19 @@ function readblock(connection::Connection,table::AbstractString,key::Bytes)
             result=Future()
             tempresults[object]=result
             @async begin
-                        acquires3connection()
-                        @timeout(timeoutlimit,
-                            put!(result,s3getobject(connection.bucket,
-                                                    object[3])),
-                            put!(result,begin
-                                            uniqueid = hash([table,key,object])
-                                            @loginfo "    readblock timed out: $(table) $(uniqueid)"
-                                            nothing
-                                        end))
-                        releases3connection()
-                   end
+                acquires3connection()
+                put!(result,
+                     @timeout(timeoutlimit,
+                        s3getobject(connection.bucket,object[3]),
+                        begin
+                            uniqueid = hash([table,key,object])
+                            @loginfo "    readblock timed out: $(table) $(uniqueid)"
+                            nothing
+                        end
+                        )
+                     )
+                releases3connection()
+            end
         end
         for (object,result) in tempresults
             r=fetch(result)
