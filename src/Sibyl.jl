@@ -18,6 +18,8 @@ import Base.delete!
 include("base62.jl")
 
 const S3CONNECTIONS = 128
+const TIMEOUTLIMIT = 32
+const TIMEOUTINCREMENT = 8
 
 const AWSEnv=Dict
 
@@ -44,6 +46,8 @@ mutable struct GlobalEnvironment
     nevercompact::Bool
     mtimelock::Base.Semaphore
     getawsenvlock::Base.Semaphore
+    timeoutlimit::Int
+    timeoutincrement::Int
     
     putcnt::Int
     getcnt::Int
@@ -58,6 +62,8 @@ const globalenv=GlobalEnvironment(Nullable{AWSEnv}(),
                                   true,false,false,
                                   Base.Semaphore(1),
                                   Base.Semaphore(1),
+                                  TIMEOUTLIMIT,
+                                  TIMEOUTINCREMENT,
                                   0,0,0,0)
 
 function reset_locks()
@@ -284,7 +290,7 @@ function touchmtimes(bucket,s3key)
     table=s[end-4]
     myhash=s[end-3]
     m=asbytes(Int64(round(time())))
-    timeoutlimit=32
+    timeoutlimit=globalenv.timeoutlimit
     todo=Set(0:4)
     while length(todo)>0
         tempresults=Dict()
@@ -308,7 +314,7 @@ function touchmtimes(bucket,s3key)
                 pop!(todo,i)
             end
         end
-        timeoutlimit+=4
+        timeoutlimit+=globalenv.timeoutincrement
     end
 end
 
@@ -557,7 +563,7 @@ function saveblock(blocktransaction::BlockTransaction,connection,table,key)
 end
 
 function save(t::Transaction)
-    timeoutlimit=32
+    timeoutlimit=globalenv.timeoutlimit
     @sync for (table,blocktransactions) in t.tables
         todo=Set(blocktransactions)
         while length(todo)>0
@@ -587,13 +593,13 @@ function save(t::Transaction)
                     pop!(todo,object)
                 end
             end
-            timeoutlimit+=4
+            timeoutlimit+=globalenv.timeoutincrement
         end
     end
 end
 
 function readblock(connection::Connection,table::AbstractString,key::Bytes)
-    timeoutlimit=32
+    timeoutlimit=globalenv.timeoutlimit
     objects=[(frombytes(Base62.decode(String(split(x,"/")[end-1])),Int64)[1],
               split(x,"/")[end],x)
              for x in s3listobjects(connection.bucket,s3keyprefix(connection.space,table,key))]
@@ -625,7 +631,7 @@ function readblock(connection::Connection,table::AbstractString,key::Bytes)
                 push!(results,r)
             end
         end
-        timeoutlimit+=4
+        timeoutlimit+=globalenv.timeoutincrement
     end
     r=BlockTransaction()
     for result in results
