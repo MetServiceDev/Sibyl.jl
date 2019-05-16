@@ -17,10 +17,6 @@ import Base.delete!
 
 include("base62.jl")
 
-const S3CONNECTIONS = 128
-const TIMEOUTLIMIT = 32
-const TIMEOUTINCREMENT = 8
-
 const AWSEnv=Dict
 
 export asbytes,frombytes
@@ -48,6 +44,7 @@ mutable struct GlobalEnvironment
     getawsenvlock::Base.Semaphore
     timeoutlimit::Int
     timeoutincrement::Int
+    verbose::Bool
     
     putcnt::Int
     getcnt::Int
@@ -56,22 +53,16 @@ mutable struct GlobalEnvironment
 end
 
 const globalenv=GlobalEnvironment(Nullable{AWSEnv}(),
-                                  Base.Semaphore(S3CONNECTIONS),
+                                  Base.Semaphore(128),
                                   FSCache.Cache(),
                                   Dict{Tuple{String,String},Tuple{Int,Int}}(),
                                   true,false,false,
                                   Base.Semaphore(1),
                                   Base.Semaphore(1),
-                                  TIMEOUTLIMIT,
-                                  TIMEOUTINCREMENT,
+                                  32,
+                                  8,
+                                  false,
                                   0,0,0,0)
-
-function reset_locks()
-    global globalenv
-    globalenv.s3connections = Base.Semaphore(S3CONNECTIONS)
-    globalenv.mtimelock = Base.Semaphore(1)
-    globalenv.getawsenvlock = Base.Semaphore(1)
-end
 
 function __init__()
     global makeawsenv=defaultmakeawsenv
@@ -305,7 +296,9 @@ function touchmtimes(bucket,s3key)
                          s3putobject(bucket,prefix,m),
                          begin
                             uniqueid = hash([bucket,key])
-                            @loginfo "    touchmtimes timed out: $(bucket) $(uniqueid)"
+                            if globalenv.verbose
+                                @loginfo "    touchmtimes timed out: $(bucket) $(uniqueid)"
+                            end
                             nothing
                          end
                     )
@@ -582,7 +575,9 @@ function save(t::Transaction)
                                   saveblock(blocktransaction, t.connection, table, key),
                                   begin
                                       uniqueid = hash([table,key,blocktransaction])
-                                      @loginfo "    save timed out: $(table) $(uniqueid)"
+                                      if globalenv.verbose
+                                          @loginfo "    save timed out: $(table) $(uniqueid)"
+                                      end
                                       nothing
                                   end
                              )
@@ -621,7 +616,9 @@ function readblock(connection::Connection,table::AbstractString,key::Bytes)
                         s3getobject(connection.bucket,object[3]),
                         begin
                             uniqueid = hash([table,key,object])
-                            @loginfo "    readblock timed out: $(table) $(uniqueid)"
+                            if globalenv.verbose
+                                @loginfo "    readblock timed out: $(table) $(uniqueid)"
+                            end
                             nothing
                         end
                         )
