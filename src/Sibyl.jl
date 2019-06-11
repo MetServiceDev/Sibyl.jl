@@ -59,8 +59,8 @@ const globalenv=GlobalEnvironment(Nullable{AWSEnv}(),
                                   true,false,false,
                                   Base.Semaphore(1),
                                   Base.Semaphore(1),
-                                  32,
-                                  8,
+                                  64,
+                                  16,
                                   false,
                                   0,0,0,0)
 
