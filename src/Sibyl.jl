@@ -596,13 +596,13 @@ function save(t::Transaction)
     end
 end
 
-function readblock(connection::Connection,table::AbstractString,key::Bytes)
+function readblock(connection::Connection,table::AbstractString,key::Bytes;forcecompact=false)
     timeoutlimit=globalenv.timeoutlimit
     objects=[(frombytes(Base62.decode(String(split(x,"/")[end-1])),Int64)[1],
               split(x,"/")[end],x)
              for x in s3listobjects(connection.bucket,s3keyprefix(connection.space,table,key))]
     sort!(objects)
-    results=[]
+    results=Dict()
     todo=Set(objects)
     while length(todo)>0
         tempresults=Dict()
@@ -630,14 +630,14 @@ function readblock(connection::Connection,table::AbstractString,key::Bytes)
             r=fetch(result)
             if r!=nothing
                 pop!(todo,object)
-                push!(results,r)
+                results[object]=r
             end
         end
         timeoutlimit+=globalenv.timeoutincrement
     end
     r=BlockTransaction()
-    for result in results
-        interpret!(r,result)
+    for object in objects # process in sorted order
+        interpret!(r,results[object])
     end
     if !(globalenv.nevercompact)
         s3livekeys=String[]
@@ -673,12 +673,12 @@ function deletekey(connection::Connection,table::String,key::Bytes)
     end
 end
 
-function loadblocks!(t::Transaction,tablekeys)
+function loadblocks!(t::Transaction,tablekeys;forcecompact=false)
     results=[]
     for (table,key) in tablekeys
         result=Future()
         push!(results,result)
-        @async put!(result,readblock(t.connection,table,key))
+        @async put!(result,readblock(t.connection,table,key;forcecompact=forcecompact))
     end
     for i=1:length(tablekeys)
         if !haskey(t.tables,tablekeys[i][1])
