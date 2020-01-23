@@ -34,18 +34,16 @@ include("fscache.jl")
 
 mutable struct GlobalEnvironment
     awsenv::Nullable{AWSEnv}
-    s3connections::Base.Semaphore
+    s3putconnections::Base.Semaphore
+    s3getconnections::Base.Semaphore
+    s3delconnections::Base.Semaphore
+    s3lstconnections::Base.Semaphore
     cache::SibylCache
     mtimes::Dict{Tuple{String,String},Tuple{Int,Int}}
     touchmtimes::Bool
     forcecompact::Bool
     nevercompact::Bool
     mtimelock::Base.Semaphore
-    getawsenvlock::Base.Semaphore
-    timeoutlimit::Int
-    timeoutincrement::Int
-    verbose::Bool
-    
     putcnt::Int
     getcnt::Int
     lstcnt::Int
@@ -53,15 +51,14 @@ mutable struct GlobalEnvironment
 end
 
 const globalenv=GlobalEnvironment(Nullable{AWSEnv}(),
+                                  Base.Semaphore(8),
                                   Base.Semaphore(128),
-                                  FSCache.Cache(),
+                                  Base.Semaphore(128),
+                                  Base.Semaphore(128),
+                                  NoCache.Cache(),
                                   Dict{Tuple{String,String},Tuple{Int,Int}}(),
                                   true,false,false,
                                   Base.Semaphore(1),
-                                  Base.Semaphore(1),
-                                  64,
-                                  16,
-                                  false,
                                   0,0,0,0)
 
 function __init__()
@@ -95,64 +92,47 @@ function getawsenv()
     return get(globalenv.awsenv)
 end
 
-function acquires3connection()
+function acquires3connection(action)
     global globalenv
     yield()
-    Base.acquire(globalenv.s3connections)
+    if action==:put
+        Base.acquire(globalenv.s3putconnections)
+    elseif action==:get
+        Base.acquire(globalenv.s3getconnections)
+    elseif action==:del
+        Base.acquire(globalenv.s3delconnections)
+    elseif action==:lst
+        Base.acquire(globalenv.s3lstconnections)
+    else
+        Error("Unknown action $action")
+    end
 end
 
-function releases3connection()
+function releases3connection(action)
     global globalenv
-    Base.release(globalenv.s3connections)
-end
-
-function acquiregetawsenvlock()
-    global globalenv
-    yield()
-    Base.acquire(globalenv.getawsenvlock)
-end
-
-function releasegetawsenvlock()
-    global globalenv
-    Base.release(globalenv.getawsenvlock)
-end
-
-"""
-@timeout secs expr then pollint
-Start executing `expr`; if it doesn't finish executing in `secs` seconds,
-then execute `then`. `pollint` controls the amount of time to wait in between
-checking if `expr` has finished executing (short for polling interval).
-"""
-macro timeout(t, expr, then, pollint=0.1)
-    return quote
-        if $(esc(t)) == Inf
-            $(esc(expr))
-        else
-            tm = Float64($(esc(t)))
-            start = time()
-            tsk = @async $(esc(expr))
-            yield()
-            while !istaskdone(tsk) && (time() - start < tm)
-                sleep($pollint)
-            end
-            if istaskdone(tsk)
-                tsk.result
-            else
-                $(esc(then))
-            end
-        end
+    if action==:put
+        Base.release(globalenv.s3putconnections)
+    elseif action==:get
+        Base.release(globalenv.s3getconnections)
+    elseif action==:del
+        Base.release(globalenv.s3delconnections)
+    elseif action==:lst
+        Base.release(globalenv.s3lstconnections)
+    else
+        Error("Unknown action $action")
     end
 end
 
 function s3putobject(bucket,s3key,m)
-    globalenv.putcnt+=1
     trycount=0
+    acquires3connection(:put)
     while true
         try
-            acquiregetawsenvlock()
             env=getawsenv()
-            releasegetawsenvlock()
-            AWSS3.s3_put(env,bucket,s3key,m)
+            metadata = Dict("Content-Length"=>string(length(m)))
+            globalenv.putcnt+=1
+            AWSS3.s3_put(env,bucket,s3key,m; metadata=metadata)
+            releases3connection(:put)
             return 0
         catch e
             @logwarn "The following exception was caught in Sibyl.s3putobject"
@@ -160,47 +140,46 @@ function s3putobject(bucket,s3key,m)
         end
         if trycount>0
             try
-                acquiregetawsenvlock()
                 getnewawsenv()
-                releasegetawsenvlock()
             catch
             end
             sleep(trycount)
         end
         trycount=trycount+1
         if trycount>15
+            releases3connection(:put)
             error("s3putobject timed out.")
         end
     end
 end
 
 function s3getobject1(bucket,s3key)
-    globalenv.getcnt+=1
     trycount=0
+    acquires3connection(:get)
     while true
         try
-            acquiregetawsenvlock()
             env=getawsenv()
-            releasegetawsenvlock()
+            globalenv.getcnt+=1
             r=AWSS3.s3_get(env,bucket,s3key)
+            releases3connection(:get)
             return r
         catch e
             if (e isa AWSCore.AWSException)&&(e.code=="NoSuchKey")
+                releases3connection(:get)
                 return empty
             end
             @logwarn e
         end
         if trycount>0
             try
-                acquiregetawsenvlock()
                 getnewawsenv()
-                releasegetawsenvlock()
             catch
             end
             sleep(trycount)
         end
         trycount=trycount+1
         if trycount>15
+            releases3connection(:get)
             error("s3getobject timed out.")
         end
     end
@@ -218,26 +197,26 @@ function s3getobject(bucket,s3key)
 end
 
 function s3deleteobject(bucket,s3key)
-    globalenv.delcnt+=1
-    acquires3connection()
+    acquires3connection(:del)
     try
         env=getawsenv()
+        globalenv.delcnt+=1
         AWSS3.s3_delete(env,bucket,s3key)
     catch
     end
-    releases3connection()
+    releases3connection(:del)
 end
 
 function s3listobjects1(bucket,prefix)
-    globalenv.lstcnt+=1
     trycount=0
-    acquires3connection()
+    acquires3connection(:lst)
     while true
         try
             env=getawsenv()
             r=String[]
             q=Dict("prefix"=>prefix)
             while true
+                globalenv.lstcnt+=1
                 resp=AWSS3.s3(env,"GET",bucket;query=q)
                 if haskey(resp,"Contents")
                     if isa(resp["Contents"],Array)
@@ -251,7 +230,7 @@ function s3listobjects1(bucket,prefix)
                     end
                 end
                 if resp["IsTruncated"]!="true"
-                    releases3connection()
+                    releases3connection(:lst)
                     return r
                 end
             end
@@ -268,7 +247,7 @@ function s3listobjects1(bucket,prefix)
         end
         trycount=trycount+1
         if trycount>15
-            releases3connection()
+            releases3connection(:lst)
             error("s3listobjects timed out.")
         end
     end
@@ -283,34 +262,8 @@ function touchmtimes(bucket,s3key)
     table=s[end-4]
     myhash=s[end-3]
     m=asbytes(Int64(round(time())))
-    timeoutlimit=globalenv.timeoutlimit
-    todo=Set(0:4)
-    while length(todo)>0
-        tempresults=Dict()
-        @sync for i in todo
-            result=Future()
-            tempresults[i]=result
-            prefix=join([space,table,"mtime",myhash[1:i]],'/')
-            @async put!(result, 
-                @timeout(timeoutlimit,
-                         s3putobject(bucket,prefix,m),
-                         begin
-                            uniqueid = hash([bucket,key])
-                            if globalenv.verbose
-                                @loginfo "    touchmtimes timed out: $(bucket) $(uniqueid)"
-                            end
-                            nothing
-                         end
-                    )
-                )
-        end
-        for (i,result) in tempresults
-            r=fetch(result)
-            if r!=nothing
-                pop!(todo,i)
-            end
-        end
-        timeoutlimit+=globalenv.timeoutincrement
+    for i=0:4
+        @async s3putobject(bucket,join([space,table,"mtime",myhash[1:i]],'/'),m)
     end
 end
 
@@ -330,12 +283,13 @@ function getmtime(bucket,s3prefix)
             Base.release(globalenv.mtimelock)
             return globalenv.mtimes[(space,table)][2]
         end
-    end    
+    end
     val=try
-        acquires3connection()
+        acquires3connection(:get)
         frombytes(s3getobject1(bucket,join([space,table,"mtime",""],'/')),Int64)[1]
-        releases3connection()
+        releases3connection(:get)
     catch
+        releases3connection(:get)
         Int64(0)
     end
     globalenv.mtimes[(space,table)]=(Int64(round(time())),val)
@@ -353,7 +307,7 @@ function s3listobjects(bucket,prefix)
     end
     value=convert(Array{String,1},s3listobjects1(bucket,prefix))
     writecache(globalenv.cache,cachekey,asbytes(value))
-    return value    
+    return value
 end
 
 mutable struct Connection
@@ -444,7 +398,7 @@ function frombytes(data,typs...)
     io=IOBuffer(data)
     return readbytes(io,typs...)
 end
-    
+
 mutable struct BlockTransaction
     data::Dict{Bytes,Bytes}
     deleted::Set{Bytes}
@@ -559,85 +513,30 @@ function saveblock(blocktransaction::BlockTransaction,connection,table,key)
 end
 
 function save(t::Transaction)
-    timeoutlimit=globalenv.timeoutlimit
     @sync for (table,blocktransactions) in t.tables
-        todo=Set(blocktransactions)
-        while length(todo)>0
-            tempresults=Dict()
-            @sync for object in todo
-                result=Future()
-                tempresults[object]=result
-                (key,blocktransaction) = object
-                @async begin
-                    acquires3connection()
-                    put!(result,
-                         @timeout(timeoutlimit,
-                                  saveblock(blocktransaction, t.connection, table, key),
-                                  begin
-                                      uniqueid = hash([table,key,blocktransaction])
-                                      if globalenv.verbose
-                                          @loginfo "    save timed out: $(table) $(uniqueid)"
-                                      end
-                                      nothing
-                                  end
-                             )
-                         )
-                    releases3connection()
-                end
-            end
-            for (object,result) in tempresults
-                r=fetch(result)
-                if r!=nothing
-                    pop!(todo,object)
-                end
-            end
-            timeoutlimit+=globalenv.timeoutincrement
+        for (key,blocktransaction) in blocktransactions
+            @async saveblock(blocktransaction,t.connection,table,key)
         end
     end
 end
 
 function readblock(connection::Connection,table::AbstractString,key::Bytes;forcecompact=false)
-    timeoutlimit=globalenv.timeoutlimit
     objects=[(frombytes(Base62.decode(String(split(x,"/")[end-1])),Int64)[1],
               split(x,"/")[end],x)
              for x in s3listobjects(connection.bucket,s3keyprefix(connection.space,table,key))]
     sort!(objects)
-    results=Dict()
-    todo=Set(objects)
-    while length(todo)>0
-        tempresults=Dict()
-        @sync for object in todo
-            result=Future()
-            tempresults[object]=result
-            @async begin
-                acquires3connection()
-                put!(result,
-                     @timeout(timeoutlimit,
-                        s3getobject(connection.bucket,object[3]),
-                        begin
-                            uniqueid = hash([table,key,object])
-                            if globalenv.verbose
-                                @loginfo "    readblock timed out: $(table) $(uniqueid)"
-                            end
-                            nothing
-                        end
-                        )
-                     )
-                releases3connection()
-            end
-        end
-        for (object,result) in tempresults
-            r=fetch(result)
-            if r!=nothing
-                pop!(todo,object)
-                results[object]=r
-            end
-        end
-        timeoutlimit+=globalenv.timeoutincrement
+    results=[]
+    for i=1:length(objects)
+        result=Future()
+        push!(results,result)
+        @async put!(result,s3getobject(connection.bucket,objects[i][3]))
+    end
+    for i=1:length(objects)
+        results[i]=fetch(results[i])
     end
     r=BlockTransaction()
-    for object in objects # process in sorted order
-        interpret!(r,results[object])
+    for result in results
+        interpret!(r,result)
     end
     if !(globalenv.nevercompact)
         s3livekeys=String[]
@@ -650,14 +549,12 @@ function readblock(connection::Connection,table::AbstractString,key::Bytes;force
             end
         end
         compactprobability=(length(s3livekeys)-1)/(length(s3livekeys)+100)
-        if (length(s3livekeys)>=2)&&(globalenv.forcecompact)
+        if (length(s3livekeys)>=2)&&((globalenv.forcecompact)||forcecompact)
             compactprobability=1.0
         end
         if rand()<compactprobability
             newblock=BlockTransaction(r.data,r.deleted,s3livekeys)
-            acquires3connection()
             saveblock(newblock,connection,table,key)
-            releases3connection()
         end
     end
     return r
@@ -690,7 +587,6 @@ end
 
 function compact(bucket,space;table="",marker="",reportfunc=println)
     globalenv.cache=NoCache.Cache()
-    globalenv.s3connections=Base.Semaphore(512)
     globalenv.forcecompact=true
     connection=Connection(bucket,space)
     env=getawsenv()
