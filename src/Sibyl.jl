@@ -520,7 +520,7 @@ function save(t::Transaction)
     end
 end
 
-function readblock(connection::Connection,table::AbstractString,key::Bytes;forcecompact=false)
+function readblock(connection::Connection,table::AbstractString,key::Bytes;forcecompact=false,async=true)
     objects=[(frombytes(Base62.decode(String(split(x,"/")[end-1])),Int64)[1],
               split(x,"/")[end],x)
              for x in s3listobjects(connection.bucket,s3keyprefix(connection.space,table,key))]
@@ -529,7 +529,11 @@ function readblock(connection::Connection,table::AbstractString,key::Bytes;force
     for i=1:length(objects)
         result=Future()
         push!(results,result)
-        @async put!(result,s3getobject(connection.bucket,objects[i][3]))
+        if async
+            @async put!(result,s3getobject(connection.bucket,objects[i][3]))
+        else
+            put!(result,s3getobject(connection.bucket,objects[i][3]))
+        end
     end
     for i=1:length(objects)
         results[i]=fetch(results[i])
@@ -542,7 +546,11 @@ function readblock(connection::Connection,table::AbstractString,key::Bytes;force
         s3livekeys=String[]
         @sync for x in objects
             if x[3] in r.s3keystodelete
-                @async s3deleteobject(connection.bucket,x[3])
+                if async
+                    @async s3deleteobject(connection.bucket,x[3])
+                else
+                    s3deleteobject(connection.bucket,x[3])
+                end
                 touchmtimes(connection.bucket,x[3])
             else
                 push!(s3livekeys,x[3])
@@ -570,12 +578,16 @@ function deletekey(connection::Connection,table::String,key::Bytes)
     end
 end
 
-function loadblocks!(t::Transaction,tablekeys;forcecompact=false)
+function loadblocks!(t::Transaction,tablekeys;forcecompact=false,async=true)
     results=[]
     for (table,key) in tablekeys
         result=Future()
         push!(results,result)
-        @async put!(result,readblock(t.connection,table,key;forcecompact=forcecompact))
+        if async
+            @async put!(result,readblock(t.connection,table,key;forcecompact=forcecompact),async=true)
+        else
+            put!(result,readblock(t.connection,table,key;forcecompact=forcecompact),async=false)
+        end
     end
     for i=1:length(tablekeys)
         if !haskey(t.tables,tablekeys[i][1])
