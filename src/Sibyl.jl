@@ -584,9 +584,9 @@ function loadblocks!(t::Transaction,tablekeys;forcecompact=false,async=true)
         result=Future()
         push!(results,result)
         if async
-            @async put!(result,readblock(t.connection,table,key;forcecompact=forcecompact),async=true)
+            @async put!(result,readblock(t.connection,table,key;forcecompact=forcecompact,async=true))
         else
-            put!(result,readblock(t.connection,table,key;forcecompact=forcecompact),async=false)
+            put!(result,readblock(t.connection,table,key;forcecompact=forcecompact,async=false))
         end
     end
     for i=1:length(tablekeys)
