@@ -51,18 +51,33 @@ mutable struct GlobalEnvironment
 end
 
 const globalenv=GlobalEnvironment(Nullable{AWSEnv}(),
-                                  Base.Semaphore(8),
-                                  Base.Semaphore(128),
-                                  Base.Semaphore(128),
-                                  Base.Semaphore(128),
-                                  NoCache.Cache(),
-                                  Dict{Tuple{String,String},Tuple{Int,Int}}(),
-                                  true,false,false,
-                                  Base.Semaphore(1),
-                                  0,0,0,0)
+                                Base.Semaphore(8),
+                                Base.Semaphore(128),
+                                Base.Semaphore(128),
+                                Base.Semaphore(128),
+                                NoCache.Cache(),
+                                Dict{Tuple{String,String},Tuple{Int,Int}}(),
+                                true,false,false,
+                                Base.Semaphore(1),
+                                0,0,0,0)
 
 function __init__()
     global makeawsenv=defaultmakeawsenv
+    globalenv.awsenv=Nullable{AWSEnv}()
+    globalenv.s3putconnections=Base.Semaphore(8)
+    globalenv.s3getconnections=Base.Semaphore(128)
+    globalenv.s3delconnections=Base.Semaphore(128)
+    globalenv.s3lstconnections=Base.Semaphore(128)
+    globalenv.cache::SibylCache=NoCache.Cache()
+    globalenv.mtimes=Dict{Tuple{String,String},Tuple{Int,Int}}()
+    globalenv.touchmtimes=true
+    globalenv.forcecompact=false
+    globalenv.nevercompact=false
+    globalenv.mtimelock=Base.Semaphore(1)
+    globalenv.putcnt=0
+    globalenv.getcnt=0
+    globalenv.lstcnt=0
+    globalenv.delcnt=0
 end
 
 function setmakeawsenv(f)
