@@ -1,5 +1,6 @@
 name = "Sibyl"
 uuid = "7ce25073-11e7-4cd8-925c-006a9bb53bd6"
+version = "0.0.1"
 
 [deps]
 AWSCore = "4f1ea46c-232b-54a6-9b17-cc2d0f3e6598"
